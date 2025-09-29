@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Checkers</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <style>
+    body { font-family: cursive; margin:20px; background:#fafafa; }
+    #layout { display:grid; grid-template-columns: 220px auto 220px; gap:20px; justify-content:center; }
+    #chatContainer, #movesContainer {
+      border:1px solid #ccc; padding:10px; background:#f9f9f9; height:100%;
+    }
+    #chatBox, #movesList {
+      height:400px; overflow-y:auto; border:1px solid #aaa; padding:5px; background:#fff; margin-bottom:5px;
+    }
+    #board { width:400px; height:400px; display:grid; grid-template-columns:repeat(8,1fr); grid-template-rows:repeat(8,1fr); margin:auto; border:3px solid #333; }
+    .square { width:100%; height:100%; position:relative; }
+    .dark { background:#769656; }
+    .light { background:#eeeed2; }
+    .piece { width:80%; height:80%; border-radius:50%; margin:auto; cursor:pointer; position:absolute; top:10%; left:10%; }
+    .red { background:red; }
+    .black { background:black; }
+    .king { border:3px solid gold; }
+    #status, #winner, #colorInfo, #rankStats { margin:10px; font-weight:bold; text-align:center; }
+    #winner { font-size:20px; color:#b00; }
+    button { padding:6px 12px; margin:5px; }
+  </style>
+</head>
+<body>
+  <h2>Online Checkers</h2>
+
+  <!-- Join form -->
+  <div id="roomForm">
+    <input type="text" id="roomCode" placeholder="Enter room code">
+    <button id="joinBtn">Join Room</button>
+  </div>
+
+  <!-- Layout -->
+  <div id="layout" style="display:none;">
+    <!-- Chat -->
+    <div id="chatContainer">
+      <h3>Chat</h3>
+      <div id="chatBox"></div>
+      <input id="chatInput" type="text" placeholder="Type a message..." style="width:100%;">
+      <button id="sendBtn">Send</button>
+    </div>
+
+    <!-- Game -->
+    <div id="gameUI">
+      <div id="colorInfo"></div>
+      <div id="board"></div>
+      <div id="status"></div>
+      <div id="winner" style="display:none;"></div>
+      <button id="continueBtn" style="display:none;">Continue</button>
+      <div id="rankStats"></div>
+    </div>
+
+    <!-- Moves -->
+    <div id="movesContainer">
+      <h3>Moves</h3>
+      <div id="movesList"></div>
+    </div>
+  </div>
+
+<script>
+/* === GAME LOGIC === */
+let boardState = []; // 8x8 array
+let myColor = null;
+let selected = null;
+let stats = JSON.parse(localStorage.getItem("checkersStats")) || { points:0, wins:0, losses:0, draws:0 };
+
+const boardEl = document.getElementById("board");
+const statusEl = document.getElementById("status");
+const winnerEl = document.getElementById("winner");
+const continueBtn = document.getElementById("continueBtn");
+const colorInfoEl = document.getElementById("colorInfo");
+const movesList = document.getElementById("movesList");
+const rankStatsEl = document.getElementById("rankStats");
+
+function renderStats() {
+  rankStatsEl.textContent = `Points: ${stats.points} | Wins: ${stats.wins} | Losses: ${stats.losses} | Draws: ${stats.draws}`;
+}
+function saveStats(){ localStorage.setItem("checkersStats",JSON.stringify(stats)); renderStats(); }
+
+function initBoard() {
+  boardState = [];
+  for (let r=0;r<8;r++) {
+    boardState[r]=[];
+    for (let c=0;c<8;c++) {
+      if (r<3 && (r+c)%2===1) boardState[r][c]="black";
+      else if (r>4 && (r+c)%2===1) boardState[r][c]="red";
+      else boardState[r][c]=null;
+    }
+  }
+  renderBoard();
+}
+
+function renderBoard() {
+  boardEl.innerHTML="";
+  for (let r=0;r<8;r++) {
+    for (let c=0;c<8;c++) {
+      const sq=document.createElement("div");
+      sq.className="square "+((r+c)%2?"dark":"light");
+      sq.dataset.row=r; sq.dataset.col=c;
+      if (boardState[r][c]) {
+        const piece=document.createElement("div");
+        piece.className="piece "+boardState[r][c];
+        if (boardState[r][c].includes("king")) piece.classList.add("king");
+        sq.appendChild(piece);
+      }
+      sq.onclick=()=>handleClick(r,c);
+      boardEl.appendChild(sq);
+    }
+  }
+}
+
+function handleClick(r,c) {
+  if (selected) {
+    let [sr,sc]=selected;
+    if (tryMove(sr,sc,r,c)) {
+      addMoveToList(sr,sc,r,c);
+      selected=null;
+      renderBoard();
+      checkWinner();
+    } else {
+      selected=null;
+    }
+  } else {
+    if (boardState[r][c] && boardState[r][c].startsWith(myColor)) {
+      selected=[r,c];
+    }
+  }
+}
+
+function tryMove(sr,sc,r,c) {
+  let piece=boardState[sr][sc];
+  if (!piece) return false;
+  let dir=(piece.includes("red")?-1:1);
+  let dr=r-sr, dc=c-sc;
+  // simple move
+  if (Math.abs(dr)===1 && Math.abs(dc)===1 && !boardState[r][c]) {
+    if (piece.includes("king")||dr===dir){ boardState[r][c]=piece; boardState[sr][sc]=null; kingIfNeeded(r,c); return true;}
+  }
+  // capture
+  if (Math.abs(dr)===2 && Math.abs(dc)===2) {
+    let mr=(sr+r)/2, mc=(sc+c)/2;
+    if (boardState[mr][mc] && !boardState[r][c] && !boardState[mr][mc].startsWith(myColor)) {
+      boardState[r][c]=piece; boardState[sr][sc]=null; boardState[mr][mc]=null;
+      kingIfNeeded(r,c); return true;
+    }
+  }
+  return false;
+}
+
+function kingIfNeeded(r,c) {
+  if (boardState[r][c]==="red" && r===0) boardState[r][c]="red-king";
+  if (boardState[r][c]==="black" && r===7) boardState[r][c]="black-king";
+}
+
+function addMoveToList(sr,sc,r,c) {
+  let div=document.createElement("div");
+  div.textContent=`${myColor}: ${String.fromCharCode(97+sc)}${8-sr} → ${String.fromCharCode(97+c)}${8-r}`;
+  movesList.appendChild(div);
+  movesList.scrollTop=movesList.scrollHeight;
+}
+
+function checkWinner() {
+  let reds=0,blacks=0;
+  for(let r=0;r<8;r++) for(let c=0;c<8;c++) {
+    if(boardState[r][c]&&boardState[r][c].includes("red")) reds++;
+    if(boardState[r][c]&&boardState[r][c].includes("black")) blacks++;
+  }
+  if(reds===0||blacks===0){
+    winnerEl.textContent=(reds===0?"Black":"Red")+" wins!";
+    winnerEl.style.display="block"; continueBtn.style.display="inline-block";
+    if(myColor && winnerEl.textContent.startsWith(myColor.charAt(0).toUpperCase()+myColor.slice(1))){
+      stats.wins++; stats.points+=2;
+    } else {
+      stats.losses++; stats.points-=2;
+    }
+    saveStats();
+  }
+}
+
+continueBtn.onclick=()=>{initBoard();winnerEl.style.display="none";continueBtn.style.display="none";};
+
+/* === PLACEHOLDER: FIREBASE HOOKS ===
+   Replace these with actual Firebase calls.
+   - setBoardState(roomId, boardState)
+   - listenForBoardUpdates(roomId, callback)
+   - sendChatMessage(roomId, text)
+   - listenForChat(roomId, callback)
+   - pushMove(roomId, move)
+   - listenForMoves(roomId, callback)
+*/
+function fakeFirebaseLog(msg){console.log("[Firebase hook] "+msg);}
+</script>
+</body>
+</html>
