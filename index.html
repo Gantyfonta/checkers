@@ -1,620 +1,217 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <title>Realtime Checkers (Firebase Rooms)</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta charset="UTF-8">
+  <title>Online Checkers</title>
   <style>
-    body { font-family: Arial, Helvetica, sans-serif; margin:20px; background:#111; color:#eee; }
-    h2 { text-align:center; }
-    #layout { display:grid; grid-template-columns:220px auto 260px; gap:16px; align-items:start; }
-    #roomForm { margin-bottom:10px; }
-    #boardWrap { text-align:center; }
-    #board { width:480px; height:480px; display:grid; grid-template-columns:repeat(8,1fr); grid-template-rows:repeat(8,1fr); margin:10px auto; border:3px solid #333; }
-    .square { width:100%; height:100%; position:relative; user-select:none; }
-    .light { background:#eee; }
-    .dark { background:#2b6b2b; }
-    .piece {
-      width:80%; height:80%; border-radius:50%; margin:auto; position:absolute; top:10%; left:10%; display:flex; align-items:center; justify-content:center; cursor:pointer;
-      box-sizing:border-box;
-    }
-    .red { background:#d33; }
-    .black { background:#111; }
-    .king { outline:3px solid gold; }
-    .highlight { box-shadow:0 0 0 3px rgba(255,255,0,0.35) inset; }
-    #status, #colorInfo, #rankStats { text-align:center; margin:6px 0; }
-    #movesList, #chatBox { height:380px; overflow:auto; background:#111; border:1px solid #333; padding:8px; color:#ddd; }
-    #controls { padding:8px; border:1px solid #333; background:#0f0f0f10; }
-    input, button { padding:6px; margin:6px 4px; }
-    button { cursor:pointer; }
-    .panelTitle { font-weight:bold; margin-bottom:6px; }
-    #cheatPanel { display:none; border-top:1px dashed #444; margin-top:8px; padding-top:8px; }
+    body { background:#1e1e1e; color:#ddd; font-family:sans-serif; }
+    #board { display:grid; grid-template-columns:repeat(8,60px); grid-template-rows:repeat(8,60px); margin:20px auto; }
+    .cell { width:60px; height:60px; display:flex; align-items:center; justify-content:center; font-size:32px; }
+    .dark { background:#444; }
+    .light { background:#ccc; }
+    .piece { cursor:pointer; }
+    #ui { text-align:center; margin:20px; }
+    #chat { max-height:150px; overflow-y:auto; background:#222; padding:5px; }
+    #moves { max-height:150px; overflow-y:auto; background:#222; padding:5px; margin-top:10px; }
+    input,button { margin:5px; padding:5px; }
   </style>
 </head>
 <body>
-  <h2>Realtime Checkers — Rooms + Chat + Moves</h2>
-
-  <div id="roomForm">
-    <input id="roomCode" placeholder="Enter room code (or create one)">
+  <h1 style="text-align:center">Online Checkers</h1>
+  <div id="ui">
     <button id="createBtn">Create Room</button>
+    <input id="roomInput" placeholder="Room ID">
     <button id="joinBtn">Join Room</button>
+    <div id="roomDisplay"></div>
+    <div id="rankStats"></div>
   </div>
+  <div id="board"></div>
+  <div id="chat"></div>
+  <input id="chatInput" placeholder="Type message...">
+  <button id="sendBtn">Send</button>
+  <div id="moves"></div>
 
-  <div id="layout" style="display:none;">
-    <!-- Left: Chat -->
-    <div id="left">
-      <div class="panelTitle">Chat</div>
-      <div id="chatBox"></div>
-      <input id="chatInput" placeholder="Message..." style="width:100%">
-      <button id="sendBtn">Send</button>
-    </div>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-app.js";
+import { getDatabase, ref, set, onValue, push, update } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-database.js";
 
-    <!-- Center: Board + status -->
-    <div id="boardWrap">
-      <div id="colorInfo"></div>
-      <div id="board"></div>
-      <div id="status"></div>
-      <div id="winner" style="display:none; text-align:center; font-weight:bold; color:#ff4d4d; margin-top:8px;"></div>
-      <button id="continueBtn" style="display:none;">New Game</button>
-      <div id="rankStats"></div>
-      <div id="cheatPanel">
-        <div class="panelTitle">Magnus Panel</div>
-        <button id="teleportBtn">Teleport Piece</button>
-        <button id="instantWinBtn">Instant Win</button>
-        <button id="instantLossBtn">Instant Loss</button>
-        <button id="instantTieBtn">Instant Tie</button>
-      </div>
-    </div>
+const firebaseConfig = {
+  apiKey: "AIzaSyD9sgzBhmVoRAgfWK7vPPe1SPpA_7EICXA",
+  authDomain: "checkers-282e8.firebaseapp.com",
+  projectId: "checkers-282e8",
+  storageBucket: "checkers-282e8.firebasestorage.app",
+  messagingSenderId: "278516610865",
+  appId: "1:278516610865:web:28c0256a814938e39c2210",
+  measurementId: "G-FSJHLG5E0X"
+};
+const app = initializeApp(firebaseConfig);
+const db = getDatabase(app);
 
-    <!-- Right: Moves -->
-    <div id="right">
-      <div class="panelTitle">Moves</div>
-      <div id="movesList"></div>
-    </div>
-  </div>
+// ---------- Game State ----------
+let boardState = null;
+let myColor = null;
+let roomId = null;
+let selected = null;
+let turn = "red";
 
-  <script type="module">
-    // Firebase SDK (modular v9 style)
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-app.js";
-    import { getDatabase, ref, set, get, update, push, onValue, onChildAdded, onDisconnect } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-database.js";
+const boardEl = document.getElementById("board");
+const chatEl = document.getElementById("chat");
+const chatInput = document.getElementById("chatInput");
+const sendBtn = document.getElementById("sendBtn");
+const movesEl = document.getElementById("moves");
+const roomDisplay = document.getElementById("roomDisplay");
+const rankStatsEl = document.getElementById("rankStats");
 
-    // ---------- YOUR FIREBASE CONFIG (you provided this earlier) ----------
-    const firebaseConfig = {
-      apiKey: "AIzaSyD9sgzBhmVoRAgfWK7vPPe1SPpA_7EICXA",
-      authDomain: "checkers-282e8.firebaseapp.com",
-      projectId: "checkers-282e8",
-      storageBucket: "checkers-282e8.firebasestorage.app",
-      messagingSenderId: "278516610865",
-      appId: "1:278516610865:web:28c0256a814938e39c2210",
-      measurementId: "G-FSJHLG5E0X",
-      databaseURL: "https://checkers-282e8-default-rtdb.firebaseio.com"
-    };
-    // ---------------------------------------------------------------------
+let stats = JSON.parse(localStorage.getItem("checkersStats")||`{"points":0,"wins":0,"losses":0,"draws":0}`);
 
-    const app = initializeApp(firebaseConfig);
-    const db = getDatabase(app);
-
-    // DOM
-    const roomForm = document.getElementById("roomForm");
-    const roomCodeInput = document.getElementById("roomCode");
-    const createBtn = document.getElementById("createBtn");
-    const joinBtn = document.getElementById("joinBtn");
-    const layout = document.getElementById("layout");
-    const boardEl = document.getElementById("board");
-    const statusEl = document.getElementById("status");
-    const colorInfoEl = document.getElementById("colorInfo");
-    const winnerEl = document.getElementById("winner");
-    const continueBtn = document.getElementById("continueBtn");
-    const chatBox = document.getElementById("chatBox");
-    const chatInput = document.getElementById("chatInput");
-    const sendBtn = document.getElementById("sendBtn");
-    const movesList = document.getElementById("movesList");
-    const rankStatsEl = document.getElementById("rankStats");
-    const cheatPanel = document.getElementById("cheatPanel");
-
-    const teleportBtn = document.getElementById("teleportBtn");
-    const instantWinBtn = document.getElementById("instantWinBtn");
-    const instantLossBtn = document.getElementById("instantLossBtn");
-    const instantTieBtn = document.getElementById("instantTieBtn");
-
-    // Game state
-    let boardState = []; // 8x8 array of null | "red" | "black" | "red-king" | "black-king"
-    let turn = "red";    // who's to move
-    let roomId = null;
-    let roomRef = null;
-    let myId = null;
-    let myColor = null;  // "red" | "black" | null (spectator)
-    let selected = null; // [r,c] selected piece for local UI
-    let mustContinueMultiJump = false; // when in a forced multi-jump state
-    let multiJumpFrom = null; // coordinates of piece that must continue jump
-
-    let stats = JSON.parse(localStorage.getItem("checkersStats")) || { points:0, wins:0, losses:0, draws:0 };
-
-    function renderStats(){ rankStatsEl.textContent = `Points: ${stats.points} | Wins: ${stats.wins} | Losses: ${stats.losses} | Draws: ${stats.draws}`; }
-    function saveStats(){ localStorage.setItem("checkersStats", JSON.stringify(stats)); renderStats(); }
-
-    // ----- Board rendering -----
-    function makeInitialBoard() {
-      const arr = [];
-      for (let r=0;r<8;r++) {
-        arr[r]=[];
-        for (let c=0;c<8;c++) {
-          if (r<3 && (r+c)%2===1) arr[r][c] = "black";
-          else if (r>4 && (r+c)%2===1) arr[r][c] = "red";
-          else arr[r][c] = null;
-        }
-      }
-      return arr;
-    }
-
-    function renderBoard() {
-      boardEl.innerHTML = "";
-      for (let r=0;r<8;r++){
-        for (let c=0;c<8;c++){
-          const sq = document.createElement("div");
-          sq.className = "square " + (((r+c)%2) ? "dark" : "light");
-          sq.dataset.r = r; sq.dataset.c = c;
-
-          // highlight valid selection if selected
-          if (selected && selected[0]===r && selected[1]===c) sq.classList.add("highlight");
-
-          // piece
-          const cell = boardState[r][c];
-          if (cell) {
-            const piece = document.createElement("div");
-            piece.className = "piece";
-            if (cell.includes("red")) piece.classList.add("red");
-            else piece.classList.add("black");
-            if (cell.includes("king")) piece.classList.add("king");
-            sq.appendChild(piece);
-          }
-
-          sq.onclick = ()=> onSquareClick(r,c);
-          boardEl.appendChild(sq);
-        }
-      }
-
-      colorInfoEl.textContent = myColor ? `You are ${myColor.charAt(0).toUpperCase()+myColor.slice(1)}` : "You are a Spectator";
-      statusEl.textContent = `Turn: ${turn}` + (mustContinueMultiJump ? " (continue multi-jump)" : "");
-    }
-
-    // ----- Coordinate helpers -----
-    function coordToAlg([r,c]) { return String.fromCharCode(97+c) + (8-r); }
-    function algToCoord(al) {
-      const c = al.charCodeAt(0) - 97;
-      const r = 8 - parseInt(al.slice(1),10);
-      return [r,c];
-    }
-
-    // ----- Move logic -----
-    // returns array of moves {to:[r,c], capture: null or [mr,mc]}
-    function validMovesForPiece(r,c, board=boardState) {
-      const piece = board[r][c]; if (!piece) return [];
-      const color = piece.includes("red") ? "red" : "black";
-      const king = piece.includes("king");
-      const dirs = [];
-      if (king || color==="red") dirs.push([-1,-1],[-1,1]); // red moves up
-      if (king || color==="black") dirs.push([1,-1],[1,1]);   // black moves down
-      const moves = [];
-
-      // normal 1-step moves
-      for (const [dr,dc] of dirs) {
-        const nr=r+dr, nc=c+dc;
-        if (nr>=0 && nr<8 && nc>=0 && nc<8 && !board[nr][nc]) {
-          moves.push({to:[nr,nc], capture:null});
-        }
-      }
-
-      // jumps
-      for (const [dr,dc] of dirs) {
-        const mr=r+dr, mc=c+dc;
-        const tr=r+2*dr, tc=c+2*dc;
-        if (tr>=0 && tr<8 && tc>=0 && tc<8 && mr>=0 && mr<8 && mc>=0 && mc<8) {
-          const mid = board[mr][mc];
-          if (mid && !mid.includes(color) && !board[tr][tc]) {
-            moves.push({to:[tr,tc], capture:[mr,mc]});
-          }
-        }
-      }
-
-      return moves;
-    }
-
-    // returns true if ANY capture exists for the given color on the board
-    function anyCaptureExistsForColor(color, board=boardState) {
-      for (let r=0;r<8;r++){
-        for (let c=0;c<8;c++){
-          const p = board[r][c];
-          if (p && p.includes(color)) {
-            const moves = validMovesForPiece(r,c,board);
-            if (moves.some(m=>m.capture)) return true;
-          }
-        }
-      }
-      return false;
-    }
-
-    // try to execute a move from [fr,fc] to [tr,tc] for the player 'actor' (must be their piece)
-    // returns {success:boolean, didCapture:boolean, multiJumpPossible:boolean}
-    function attemptMove(fr,fc,tr,tc, actor) {
-      if (!boardState[fr][fc]) return {success:false};
-      const piece = boardState[fr][fc];
-      if (!piece.includes(actor)) return {success:false}; // can't move other's pieces
-
-      // if multi-jump is in progress, only allow moving the multiJumpFrom piece
-      if (mustContinueMultiJump && !(multiJumpFrom && multiJumpFrom[0]===fr && multiJumpFrom[1]===fc)) {
-        return {success:false};
-      }
-
-      const moves = validMovesForPiece(fr,fc);
-      // enforce mandatory capture
-      const captureExists = anyCaptureExistsForColor(actor);
-      // find requested move
-      const selectedMove = moves.find(m => m.to[0]===tr && m.to[1]===tc);
-      if (!selectedMove) return {success:false};
-
-      if (captureExists && !selectedMove.capture) {
-        // cannot do simple move when capture available
-        return {success:false, reason:"capture required"};
-      }
-
-      // perform move
-      boardState[tr][tc] = boardState[fr][fc];
-      boardState[fr][fc] = null;
-
-      // capture removal
-      let didCapture = false;
-      if (selectedMove.capture) {
-        const [mr,mc] = selectedMove.capture;
-        boardState[mr][mc] = null;
-        didCapture = true;
-      }
-
-      // kinging
-      if (boardState[tr][tc] === "red" && tr===0) boardState[tr][tc] = "red-king";
-      if (boardState[tr][tc] === "black" && tr===7) boardState[tr][tc] = "black-king";
-
-      // check for possible further captures from (tr,tc)
-      const further = validMovesForPiece(tr,tc).some(m=>m.capture);
-      if (didCapture && further) {
-        // multi-jump forced: leave turn the same and force same piece to continue
-        mustContinueMultiJump = true;
-        multiJumpFrom = [tr,tc];
-      } else {
-        mustContinueMultiJump = false;
-        multiJumpFrom = null;
-      }
-
-      return {success:true, didCapture, multiJumpPossible: didCapture && further};
-    }
-
-    // ----- Firebase helpers -----
-    function pushMoveToFirebase(moveObj) {
-      // moveObj: {from:[r,c], to:[r,c], player:"red"/"black", time:Date.now()}
-      push(ref(db, `rooms/${roomId}/moves`), moveObj);
-    }
-
-    function setStateInFirebase() {
-      // set both board and turn and multi-jump state
-      set(ref(db, `rooms/${roomId}/state`), {
-        board: boardState,
-        turn: turn,
-        multi: mustContinueMultiJump ? {from: multiJumpFrom} : null
-      });
-    }
-
-    function sendChatToFirebase(text) {
-      push(ref(db, `rooms/${roomId}/chat`), { sender: myColor ? myColor : "Spectator", text, time: Date.now() });
-    }
-
-    // ----- UI events -----
-    function onSquareClick(r,c) {
-      // spectators can click to highlight but not move
-      if (!roomId) return;
-      // if it's not our turn and we're a player, ignore click
-      if (myColor && myColor !== turn) return;
-
-      // if selecting, attempt move
-      if (selected) {
-        const [fr,fc] = selected;
-        // attempt
-        const result = attemptMove(fr,fc,r,c, myColor ? myColor : turn); // if spectator selecting, actor is turn (but not allowed)
-        if (result.success) {
-          // when move is performed, if it's a capture and there's a forced multi-jump we must not flip turn yet
-          if (!result.multiJumpPossible) {
-            // flip turn only if not in multi-jump
-            turn = (turn === "red" ? "black" : "red");
-          }
-          // push move & update firebase state
-          const moveObj = {
-            from: [fr,fc],
-            to: [r,c],
-            player: myColor ? myColor : "unknown",
-            capture: result.didCapture ? true : false,
-            time: Date.now()
-          };
-          pushMoveToFirebase(moveObj);
-          setStateInFirebase();
-          addMoveToList(moveObj);
-          selected = null;
-          winnerCheckAndHandle();
-        } else {
-          // invalid move: clear selection (or you could show message)
-          selected = null;
-        }
-        renderBoard();
-        return;
-      }
-
-      // otherwise, pick up a piece if it belongs to us (or if spectator, nothing)
-      if (boardState[r][c] && myColor && boardState[r][c].includes(myColor)) {
-        // but if multi-jump forced, only allow selecting that piece
-        if (mustContinueMultiJump && !(multiJumpFrom && multiJumpFrom[0]===r && multiJumpFrom[1]===c)) return;
-        // highlight available moves only, helpful for UI (not required)
-        const moves = validMovesForPiece(r,c);
-        const captureExists = anyCaptureExistsForColor(myColor);
-        // choose only allowed moves (if capture exists, only capture moves)
-        const allowed = captureExists ? moves.filter(m=>m.capture) : moves;
-        if (allowed.length===0) return; // no legal moves for this piece
-        selected = [r,c];
-        renderBoard();
-      }
-    }
-
-    // ----- Move list UI -----
-    function addMoveToList(moveObj) {
-      const div = document.createElement("div");
-      const fromAlg = coordToAlg(moveObj.from);
-      const toAlg = coordToAlg(moveObj.to);
-      div.textContent = `${moveObj.player}: ${fromAlg} → ${toAlg}${moveObj.capture ? " (x)" : ""}`;
-      movesList.appendChild(div);
-      movesList.scrollTop = movesList.scrollHeight;
-    }
-
-    // ----- Winner detection -----
-    function winnerCheckAndHandle() {
-      // if opponent has no pieces or no moves, declare winner
-      let reds=0, blacks=0;
-      let redHasMoves=false, blackHasMoves=false;
-      for (let r=0;r<8;r++){
-        for (let c=0;c<8;c++){
-          const p = boardState[r][c];
-          if (!p) continue;
-          if (p.includes("red")) { reds++; if (!redHasMoves && validMovesForPiece(r,c).length>0) redHasMoves=true; }
-          if (p.includes("black")) { blacks++; if (!blackHasMoves && validMovesForPiece(r,c).length>0) blackHasMoves=true; }
-        }
-      }
-
-      let winner = null;
-      if (reds===0 || !redHasMoves) winner = "black";
-      if (blacks===0 || !blackHasMoves) winner = "red";
-
-      if (winner) {
-        winnerEl.textContent = `${winner.charAt(0).toUpperCase()+winner.slice(1)} wins!`;
-        winnerEl.style.display = "block";
-        continueBtn.style.display = "inline-block";
-        // update stats if local player
-        if (myColor) {
-          if (winner === myColor) { stats.wins++; stats.points+=2; }
-          else { stats.losses++; stats.points-=2; }
-          saveStats();
-        }
-        // push result to firebase state
-        set(ref(db, `rooms/${roomId}/state/result`), `${winner} wins`);
-      }
-    }
-
-    continueBtn.onclick = async () => {
-      // reset board and state
-      boardState = makeInitialBoard();
-      turn = "red";
-      mustContinueMultiJump = false;
-      multiJumpFrom = null;
-      winnerEl.style.display = "none";
-      continueBtn.style.display = "none";
-      await set(ref(db, `rooms/${roomId}/state`), { board: boardState, turn, multi: null });
-      // clear moves
-      await set(ref(db, `rooms/${roomId}/moves`), null);
-      movesList.innerHTML = "";
-      renderBoard();
-    };
-
-    // ----- Chat -----
-    sendBtn.onclick = ()=> {
-      const t = chatInput.value.trim();
-      if (!t) return;
-      sendChatToFirebase(t);
-      chatInput.value = "";
-    };
-    chatInput.addEventListener("keypress", (e) => { if (e.key==="Enter") sendBtn.click(); });
-
-    function listenForChat() {
-      const chatRef = ref(db, `rooms/${roomId}/chat`);
-      onChildAdded(chatRef, (snap) => {
-        const msg = snap.val();
-        if (!msg) return;
-        // skip messages we made that are moves (we push moves to 'moves' not chat) — keep chat free
-        const div = document.createElement("div");
-        div.textContent = `${msg.sender}: ${msg.text}`;
-        chatBox.appendChild(div);
-        chatBox.scrollTop = chatBox.scrollHeight;
-      });
-    }
-
-    // ----- Listen moves & state -----
-    function listenForMoves() {
-      const movesRef = ref(db, `rooms/${roomId}/moves`);
-      onChildAdded(movesRef, (snap) => {
-        const mv = snap.val();
-        if (!mv) return;
-        addMoveToList(mv);
-      });
-    }
-
-    function listenForState() {
-      onValue(ref(db, `rooms/${roomId}/state`), (snap) => {
-        const data = snap.val();
-        if (!data) return;
-        // If local hasn't set initial board yet (first time), just set it
-        if (data.board) {
-          boardState = data.board;
-        } else {
-          boardState = makeInitialBoard();
-        }
-        if (data.turn) turn = data.turn;
-        // handle multi-jump metadata
-        if (data.multi && data.multi.from) {
-          mustContinueMultiJump = true;
-          multiJumpFrom = data.multi.from;
-        } else {
-          mustContinueMultiJump = false;
-          multiJumpFrom = null;
-        }
-        // show remote-declared result
-        if (data.result) {
-          winnerEl.textContent = data.result;
-          winnerEl.style.display = "block";
-          continueBtn.style.display = "inline-block";
-        }
-        renderBoard();
-      });
-    }
-
-    // ----- Rooms & players (same pattern as your chess code) -----
-    async function createRoom() {
-      const code = Math.random().toString(36).substr(2,6);
-      await set(ref(db, `rooms/${code}`), {
-        players: {},
-        state: { board: makeInitialBoard(), turn: "red" }
-      });
-      joinRoom(code);
-    }
-
-    async function joinRoom(codeInput) {
-      const code = codeInput || document.getElementById("roomCode").value.trim();
-      if (!code) { alert("Enter a room code or create one."); return; }
-      roomId = code;
-      roomRef = ref(db, `rooms/${roomId}`);
-      const snap = await get(roomRef);
-      if (!snap.exists()) {
-        // create if not exists
-        await set(roomRef, { players: {}, state: { board: makeInitialBoard(), turn: "red" } });
-      }
-      // claim a player slot
-      const playersRef = ref(db, `rooms/${roomId}/players`);
-      const newPlayerRef = push(playersRef); // this just generates a key; we'll set value for that key
-      myId = newPlayerRef.key;
-      const playersSnap = await get(playersRef);
-      const players = playersSnap.val() || {};
-      const taken = Object.values(players);
-      if (!taken.includes("red")) {
-        await update(playersRef, { [myId]: "red" });
-        myColor = "red";
-      } else if (!taken.includes("black")) {
-        await update(playersRef, { [myId]: "black" });
-        myColor = "black";
-      } else {
-        await update(playersRef, { [myId]: "spectator" });
-        myColor = null;
-      }
-      // set onDisconnect to remove player
-      onDisconnect(ref(db, `rooms/${roomId}/players/${myId}`)).remove();
-
-      // UI adjustments
-      roomForm.style.display = "none";
-      layout.style.display = "grid";
-      renderStats();
-      // start listening
-      listenForState();
-      listenForMoves();
-      listenForChat();
-      // show moves that exist already
-      const movesSnap = await get(ref(db, `rooms/${roomId}/moves`));
-      if (movesSnap.exists()) {
-        const m = movesSnap.val();
-        for (const k in m) addMoveToList(m[k]);
-      }
-      // show current players and set autoswap if someone leaves (server-side listener)
-      onValue(playersRef, async (psnap) => {
-        const pval = psnap.val() || {};
-        // If either side empty and spectators exist, promote a spectator to that slot
-        const entries = Object.entries(pval);
-        const redEntry = entries.find(([k,v]) => v === "red");
-        const blackEntry = entries.find(([k,v]) => v === "black");
-        const spectators = entries.filter(([k,v]) => v === "spectator");
-        if (!redEntry && spectators.length>0) {
-          const [sid] = spectators[0];
-          await update(playersRef, { [sid]: "red" });
-        }
-        if (!blackEntry && spectators.length>0) {
-          const [sid] = spectators[0];
-          await update(playersRef, { [sid]: "black" });
-        }
-        // If room becomes empty, reset board
-        if (entries.length === 0) {
-          const initial = makeInitialBoard();
-          await set(roomRef, { players: {}, state: { board: initial, turn: "red" } });
-        }
-      });
-
-      // update UI status texts
-      renderBoard();
-      statusEl.textContent = `Room: ${roomId} | You: ${myColor ? myColor : "Spectator"} | Turn: ${turn}`;
-      // enable cheat panel via 'magnus' sequence like your previous code
-      enableMagnusHotkey();
-    }
-
-    createBtn.onclick = ()=>createRoom();
-    joinBtn.onclick = ()=>joinRoom();
-
-    // ----- Moves cheats (copied/adjusted from original) -----
-    teleportBtn.onclick = async () => {
-      const from = prompt("From (ex: e3):");
-      const to = prompt("To (ex: d4):");
-      if (!from || !to) return;
-      const f = algToCoord(from);
-      const t = algToCoord(to);
-      const p = boardState[f[0]][f[1]];
-      if (p) {
-        boardState[t[0]][t[1]] = p;
-        boardState[f[0]][f[1]] = null;
-        await setStateInFirebase();
-        renderBoard();
-      }
-    };
-    instantWinBtn.onclick = ()=> { set(ref(db, `rooms/${roomId}/state/result`), `${myColor} wins`); };
-    instantLossBtn.onclick = ()=> { set(ref(db, `rooms/${roomId}/state/result`), `${myColor === "red" ? "black" : "red"} wins`); };
-    instantTieBtn.onclick = ()=> { set(ref(db, `rooms/${roomId}/state/result`), `draw`); };
-
-    function enableMagnusHotkey() {
-      document.addEventListener("keydown", (e) => {
-        if (e.key.toLowerCase() === "m") {
-          let buffer = "";
-          function handler(ev) {
-            buffer += ev.key.toLowerCase();
-            if (buffer.includes("magnus")) {
-              cheatPanel.style.display = "block";
-              document.removeEventListener("keypress", handler);
-            }
-          }
-          document.addEventListener("keypress", handler);
-        }
-      }, { once:true });
-    }
-
-   // initial local board until join
-boardState = makeInitialBoard();
-renderBoard();
+function renderStats(){ 
+  rankStatsEl.textContent = `Points: ${stats.points} | Wins: ${stats.wins} | Losses: ${stats.losses} | Draws: ${stats.draws}`;
+}
+function saveStats(){ 
+  localStorage.setItem("checkersStats", JSON.stringify(stats)); 
+  renderStats(); 
+}
 renderStats();
 
+// ---------- Helpers ----------
+function makeInitialBoard(){
+  const b = Array.from({length:8}, ()=>Array(8).fill(null));
+  for (let r=0;r<3;r++) for (let c=0;c<8;c++) if((r+c)%2==1) b[r][c]="red";
+  for (let r=5;r<8;r++) for (let c=0;c<8;c++) if((r+c)%2==1) b[r][c]="black";
+  return b;
+}
 
-    // ----- small UX: allow pressing Enter in roomCode to join -----
-    roomCodeInput.addEventListener("keypress", (e)=>{ if (e.key==="Enter") joinRoom(); });
+// ---------- Render ----------
+function renderBoard(){
+  if (!boardState || !Array.isArray(boardState) || !boardState[0]) {
+    console.warn("Board not ready yet.");
+    return;
+  }
+  boardEl.innerHTML="";
+  for(let r=0;r<8;r++){
+    for(let c=0;c<8;c++){
+      const cell=document.createElement("div");
+      cell.className="cell "+(((r+c)%2)?"dark":"light");
+      if(boardState[r][c]){
+        const piece=document.createElement("div");
+        piece.textContent=boardState[r][c]==="red"?"🔴":"⚫";
+        piece.className="piece";
+        if(myColor===boardState[r][c] && turn===myColor) {
+          piece.onclick=()=>selected={r,c};
+        }
+        cell.appendChild(piece);
+      } else {
+        if(selected && turn===myColor && (r+c)%2===1){
+          cell.onclick=()=>attemptMove(selected.r,selected.c,r,c);
+        }
+      }
+      boardEl.appendChild(cell);
+    }
+  }
+}
 
-    // make sure movesList/chat scroll visible on load
-    movesList.scrollTop = movesList.scrollHeight;
-    chatBox.scrollTop = chatBox.scrollHeight;
+// ---------- Moves ----------
+function attemptMove(sr,sc,tr,tc){
+  const piece=boardState[sr][sc];
+  if(!piece) return;
+  const dr=tr-sr, dc=tc-sc;
+  if(Math.abs(dr)===1 && Math.abs(dc)===1 && !boardState[tr][tc]){
+    boardState[tr][tc]=piece; boardState[sr][sc]=null;
+    turn=(turn==="red"?"black":"red");
+    push(ref(db,`rooms/${roomId}/moves`),{from:[sr,sc],to:[tr,tc],piece});
+    update(ref(db,`rooms/${roomId}`),{board:boardState,turn});
+    selected=null;
+    renderBoard();
+  } else if(Math.abs(dr)===2 && Math.abs(dc)===2 && !boardState[tr][tc]){
+    const mr=sr+dr/2, mc=sc+dc/2;
+    if(boardState[mr][mc] && boardState[mr][mc]!==piece){
+      boardState[tr][tc]=piece; boardState[sr][sc]=null; boardState[mr][mc]=null;
+      turn=(turn==="red"?"black":"red");
+      push(ref(db,`rooms/${roomId}/moves`),{from:[sr,sc],to:[tr,tc],piece,captured:[mr,mc]});
+      update(ref(db,`rooms/${roomId}`),{board:boardState,turn});
+      selected=null;
+      renderBoard();
+    }
+  }
+}
 
-  </script>
+// ---------- Chat ----------
+sendBtn.onclick=()=>{
+  if(!roomId) return;
+  const msg=chatInput.value.trim();
+  if(!msg) return;
+  push(ref(db,`rooms/${roomId}/chat`),{msg,time:Date.now()});
+  chatInput.value="";
+};
+function listenForChat(){
+  onValue(ref(db,`rooms/${roomId}/chat`),(snap)=>{
+    chatEl.innerHTML="";
+    snap.forEach(s=>{
+      const d=document.createElement("div");
+      d.textContent=s.val().msg;
+      chatEl.appendChild(d);
+    });
+    chatEl.scrollTop=chatEl.scrollHeight;
+  });
+}
+function listenForMoves(){
+  onValue(ref(db,`rooms/${roomId}/moves`),(snap)=>{
+    movesEl.innerHTML="";
+    snap.forEach(s=>{
+      const m=s.val();
+      const d=document.createElement("div");
+      d.textContent=`${m.piece} from ${m.from} to ${m.to}`;
+      movesEl.appendChild(d);
+    });
+    movesEl.scrollTop=movesEl.scrollHeight;
+  });
+}
+
+// ---------- Rooms ----------
+document.getElementById("createBtn").onclick=createRoom;
+document.getElementById("joinBtn").onclick=()=>joinRoom(document.getElementById("roomInput").value);
+
+function createRoom(){
+  roomId=Math.random().toString(36).slice(2,8);
+  myColor="red";
+  boardState=makeInitialBoard();
+  set(ref(db,`rooms/${roomId}`),{
+    board:boardState,
+    turn:"red",
+    players:{}
+  });
+  roomDisplay.textContent=`Room: ${roomId} (You are Red)`;
+  renderBoard();
+  listenForChat();
+  listenForMoves();
+  onValue(ref(db,`rooms/${roomId}/board`),(snap)=>{
+    const val=snap.val();
+    if(val){ boardState=val; renderBoard(); }
+  });
+  onValue(ref(db,`rooms/${roomId}/turn`),(snap)=>{
+    const val=snap.val();
+    if(val) turn=val;
+  });
+}
+
+function joinRoom(id){
+  roomId=id;
+  myColor="black";
+  roomDisplay.textContent=`Room: ${roomId} (You are Black)`;
+  listenForChat();
+  listenForMoves();
+  onValue(ref(db,`rooms/${roomId}/board`),(snap)=>{
+    const val=snap.val();
+    if(val){ boardState=val; renderBoard(); }
+  });
+  onValue(ref(db,`rooms/${roomId}/turn`),(snap)=>{
+    const val=snap.val();
+    if(val) turn=val;
+  });
+}
+
+boardState=makeInitialBoard();
+renderBoard();
+</script>
 </body>
 </html>
