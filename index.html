@@ -602,13 +602,11 @@
       }, { once:true });
     }
 
-    // ----- Utilities -----
-    function renderStats() { rankStatsEl.textContent = `Pts:${stats.points} Wins:${stats.wins} L:${stats.losses} D:${stats.draws}`; }
-    renderStats();
+   // initial local board until join
+boardState = makeInitialBoard();
+renderBoard();
+renderStats();
 
-    // initial local board until join
-    boardState = makeInitialBoard();
-    renderBoard();
 
     // ----- small UX: allow pressing Enter in roomCode to join -----
     roomCodeInput.addEventListener("keypress", (e)=>{ if (e.key==="Enter") joinRoom(); });
